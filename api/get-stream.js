@@ -1,46 +1,53 @@
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+// api/get-stream.js
+const https = require('https');
 
 module.exports = async (req, res) => {
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  const targetUrl = 'https://futbol-libres.su/eventos.html?r=aHR0cHM6Ly92aWR6ZW52aXZvLmNjL2NhbmFsLnBocD9zdHJlYW09ZHNwb3J0cw==';
-  
-  let browser = null;
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // URL objetivo (puedes pasarla como query param)
+  const targetUrl = req.query.url || 'https://vidzenvivo.cc/canal.php?stream=dsports';
   
   try {
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
-    
-    const page = await browser.newPage();
-    let m3u8Url = null;
-    
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('.m3u8') && url.includes('token=')) {
-        m3u8Url = url;
+    // Proxy la petición
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://futbol-libres.su/'
       }
-      request.continue();
     });
     
-    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.waitForTimeout(5000);
+    const html = await response.text();
     
-    if (m3u8Url) {
-      res.status(200).json({ success: true, url: m3u8Url });
+    // Extraer la URL del m3u8 del HTML usando regex
+    // Busca patrones como "var source = '...m3u8...'" o similar
+    const m3u8Match = html.match(/(https:\/\/[^'"]+\.m3u8[^'"]*)/);
+    
+    if (m3u8Match) {
+      res.status(200).json({ 
+        success: true, 
+        url: m3u8Match[1],
+        // También devolvemos el HTML por si necesitas debuggear
+        html: html.substring(0, 500) 
+      });
     } else {
-      res.status(404).json({ success: false, error: 'Stream no encontrado' });
+      res.status(404).json({ 
+        success: false, 
+        error: 'No se encontró el stream',
+        htmlPreview: html.substring(0, 1000) // Para debug
+      });
     }
     
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
-  } finally {
-    if (browser) await browser.close();
   }
 };
