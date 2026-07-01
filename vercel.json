@@ -3,6 +3,9 @@
   "functions": {
     "api/get-stream.js": {
       "maxDuration": 30
+    },
+    "api/proxy.js": {
+      "maxDuration": 30
     }
   }
 }
