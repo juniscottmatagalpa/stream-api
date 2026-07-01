@@ -1,8 +1,0 @@
-{
-  "name": "stream-api",
-  "version": "1.0.0",
-  "dependencies": {
-    "@sparticuz/chromium": "^119.0.0",
-    "puppeteer-core": "^21.0.0"
-  }
-}
