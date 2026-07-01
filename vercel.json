@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "functions": {
+    "api/get-stream.js": {
+      "maxDuration": 30
+    }
+  }
+}
