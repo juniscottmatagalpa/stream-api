@@ -4,6 +4,9 @@ const http = require('http');
 
 // Lista de páginas a scrapear (agrega las que uses)
 const SOURCES = [
+  'https://ibuffstreams.app',
+  'https://futbol-libres.su',
+  'https://footybite.ac',
   'https://footybite.ac',
   'https://tarjetaroja.tv',
   'https://futbol-libres.su',
