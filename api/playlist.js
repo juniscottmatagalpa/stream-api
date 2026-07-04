@@ -1,4 +1,3 @@
-// api/playlist.js
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -7,7 +6,7 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // URL base del stream (la que te dio Video Download Helper)
+  // La URL del stream que te dio Video Download Helper
   const STREAM_URL = 'https://p1.kamfir10.space/playlist/52907/camrys/caxi';
   
   try {
@@ -19,13 +18,15 @@ export default async function handler(req, res) {
       }
     });
 
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
     let playlist = await response.text();
     
-    // Reescribir URLs en la playlist para que apunten a nuestro proxy
-    // Las URLs .ts deben pasar por nuestro proxy
-    const proxyBase = `https://stream-api-flax-seven.vercel.app/api/proxy?url=`;
+    // Reescribir URLs para pasar por el proxy
+    const proxyBase = `https://stream-kaceurp5n-jsinfos-projects.vercel.app/api/proxy?url=`;
     
-    // Reemplazar URLs relativas o absolutas en el m3u8
     playlist = playlist.replace(
       /(https?:\/\/[^\s"\n]+)/g, 
       (match) => `${proxyBase}${encodeURIComponent(match)}`
