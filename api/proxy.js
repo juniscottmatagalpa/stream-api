@@ -1,8 +1,6 @@
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -19,15 +17,23 @@ export default async function handler(req, res) {
     
     const response = await fetch(decodedUrl, {
       headers: {
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'es-419,es;q=0.9',
+        'Origin': 'https://gooz.aapmains.net',
         'Referer': 'https://gooz.aapmains.net/',
-        'Origin': 'https://gooz.aapmains.net/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': '*/*'
+        'Sec-Ch-Ua': '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
       }
     });
 
     if (!response.ok) {
-      return res.status(response.status).json({ error: 'Failed to fetch' });
+      return res.status(response.status).json({ error: 'Upstream failed' });
     }
 
     const contentType = response.headers.get('content-type');
