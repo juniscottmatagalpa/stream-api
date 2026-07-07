@@ -1,182 +1,109 @@
-// api/scrape.js
-const https = require('https');
-const http = require('http');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
-// Lista de páginas a scrapear (agrega las que uses)
-const SOURCES = [
-  'https://ibuffstreams.app',
-  'https://futbol-libres.su',
-  'https://footybite.ac',
-  'https://footybite.ac',
-  'https://tarjetaroja.tv',
-  'https://futbol-libres.su',
-  // Agrega más fuentes aquí
-];
-
-// Headers para evitar bloqueos
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Connection': 'keep-alive',
-};
-
-// Función para hacer petición HTTP/HTTPS
-function fetchUrl(url) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    const options = {
-      headers: HEADERS,
-      timeout: 8000,
-    };
-    
-    const req = client.get(url, options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve({ html: data, finalUrl: res.responseUrl || url }));
-    });
-    
-    req.on('error', reject);
-    req.on('timeout', () => reject(new Error('Timeout')));
-  });
-}
-
-// Extraer streams del HTML
-function extractStreams(html, sourceUrl) {
-  const streams = [];
-  
-  // Buscar iframes
-  const iframeRegex = /<iframe[^>]+src=["']([^"']+)["']/gi;
-  let match;
-  while ((match = iframeRegex.exec(html)) !== null) {
-    let url = match[1];
-    if (url.startsWith('//')) url = 'https:' + url;
-    if (url.startsWith('/')) url = new URL(sourceUrl).origin + url;
-    
-    streams.push({
-      type: 'iframe',
-      url: url,
-      source: sourceUrl,
-      quality: 'HD'
-    });
-  }
-  
-  // Buscar enlaces m3u8
-  const m3u8Regex = /(https?:\/\/[^\s"']+\.m3u8)/gi;
-  while ((match = m3u8Regex.exec(html)) !== null) {
-    streams.push({
-      type: 'm3u8',
-      url: match[1],
-      source: sourceUrl,
-      quality: 'HD'
-    });
-  }
-  
-  // Buscar enlaces .mp4 directos
-  const mp4Regex = /(https?:\/\/[^\s"']+\.mp4)/gi;
-  while ((match = mp4Regex.exec(html)) !== null) {
-    streams.push({
-      type: 'mp4',
-      url: match[1],
-      source: sourceUrl,
-      quality: 'HD'
-    });
-  }
-  
-  return streams;
-}
-
-// Extraer título del partido
-function extractMatchTitle(html) {
-  // Intentar extraer de meta tags
-  const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
-                     html.match(/<meta[^>]+name=["']title["'][^>]+content=["']([^"']+)["']/i);
-  
-  if (titleMatch) return titleMatch[1].trim();
-  
-  // Intentar extraer del title tag
-  const titleTag = html.match(/<title>([^<]+)<\/title>/i);
-  if (titleTag) {
-    let title = titleTag[1].trim();
-    // Limpiar título común
-    title = title.replace(/(live|stream|online|free|watch)/gi, '').trim();
-    return title;
-  }
-  
-  // Buscar en el contenido texto común de partidos
-  const matchRegex = /([A-Za-z\s]+)\s+(?:vs|VS|v\.s\.|–|-)\s+([A-Za-z\s]+)/;
-  const contentMatch = html.match(matchRegex);
-  if (contentMatch) {
-    return `${contentMatch[1]} vs ${contentMatch[2]}`.trim();
-  }
-  
-  return 'Partido en vivo';
-}
-
-// Verificar si un stream está activo
-async function verifyStream(stream) {
-  try {
-    const url = stream.url;
-    const client = url.startsWith('https') ? https : http;
-    
-    return new Promise((resolve) => {
-      const req = client.request(url, { method: 'HEAD', timeout: 5000 }, (res) => {
-        resolve(res.statusCode === 200 || res.statusCode === 301 || res.statusCode === 302);
-      });
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => resolve(false));
-      req.end();
-    });
-  } catch {
-    return false;
-  }
-}
-
-export default async function handler(req, res) {
-  // Configurar CORS
+module.exports = async (req, res) => {
+  // Permitir CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  const allStreams = [];
-  
-  // Scrapear cada fuente
-  for (const source of SOURCES) {
-    try {
-      console.log(`Scrapeando: ${source}`);
-      const { html } = await fetchUrl(source);
+  try {
+    const { data } = await axios.get('https://futbol-libres.su/agenda/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 10000
+    });
+    
+    const $ = cheerio.load(data);
+    const eventos = [];
+    
+    // Buscar eventos en la agenda
+    $('li, .evento, [class*="event"], [class*="partido"]').each((i, elem) => {
+      const $el = $(elem);
+      const texto = $el.text();
       
-      const title = extractMatchTitle(html);
-      const streams = extractStreams(html, source);
-      
-      // Agregar título a cada stream
-      streams.forEach(stream => {
-        stream.matchTitle = title;
+      // Buscar enlaces que contengan "eventos.html?r="
+      const enlaces = [];
+      $el.find('a[href*="eventos.html?r="]').each((j, link) => {
+        const href = $(link).attr('href');
+        const textoLink = $(link).text().trim();
+        
+        // Extraer calidad
+        const calidadMatch = textoLink.match(/(\d+p)/i);
+        const calidad = calidadMatch ? calidadMatch[1] : 'SD';
+        
+        // Extraer nombre del canal
+        const nombreMatch = textoLink.match(/^([^\d]+?)(?:\s+Calidad|\s+\d+p|$)/i);
+        const nombre = nombreMatch ? nombreMatch[1].trim() : 'Canal';
+        
+        // Decodificar base64
+        const base64Match = href.match(/r=([A-Za-z0-9+/=]+)/);
+        let urlDecodificada = '';
+        if (base64Match) {
+          try {
+            urlDecodificada = Buffer.from(base64Match[1], 'base64').toString('utf-8');
+          } catch (e) {
+            urlDecodificada = '';
+          }
+        }
+        
+        if (urlDecodificada) {
+          enlaces.push({
+            nombre,
+            calidad,
+            url: urlDecodificada
+          });
+        }
       });
       
-      allStreams.push(...streams);
-    } catch (error) {
-      console.error(`Error scrapeando ${source}:`, error.message);
+      if (enlaces.length > 0) {
+        // Extraer título del partido (texto antes de los enlaces)
+        const tituloMatch = texto.match(/([^[\n]+?)(?:\d+:\d+|\[)/);
+        const titulo = tituloMatch ? tituloMatch[1].trim() : 'Evento';
+        const horaMatch = texto.match(/(\d+:\d+)/);
+        const hora = horaMatch ? horaMatch[1] : '';
+        
+        eventos.push({
+          titulo: titulo.replace(hora, '').trim() + (hora ? ` - ${hora}` : ''),
+          hora,
+          canales: enlaces
+        });
+      }
+    });
+    
+    // Si no encontramos eventos con el selector anterior, intentar otro método
+    if (eventos.length === 0) {
+      const pageText = $('body').text();
+      
+      // Buscar patrón de eventos manualmente
+      const lineas = pageText.split('\n');
+      let eventoActual = null;
+      
+      lineas.forEach(linea => {
+        linea = linea.trim();
+        if (linea.includes('vs') || linea.includes('-')) {
+          // Podría ser un título de partido
+          if (linea.match(/\d+:\d+/)) {
+            eventoActual = {
+              titulo: linea,
+              canales: []
+            };
+          }
+        }
+      });
     }
+    
+    res.json({
+      success: true,
+      fecha: new Date().toISOString(),
+      eventos: eventos
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      eventos: []
+    });
   }
-  
-  // Verificar cuáles están activos (opcional, puede ralentizar)
-  // const activeStreams = [];
-  // for (const stream of allStreams.slice(0, 5)) { // Verificar solo los primeros 5
-  //   const isActive = await verifyStream(stream);
-  //   if (isActive) activeStreams.push(stream);
-  // }
-  
-  // Responder con los streams encontrados
-  res.status(200).json({
-    success: true,
-    total: allStreams.length,
-    streams: allStreams,
-    timestamp: new Date().toISOString()
-  });
-}
+};
