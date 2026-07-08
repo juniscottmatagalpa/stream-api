@@ -2,42 +2,43 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async (req, res) => {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  try {
-    // Detectar si es una petición de proxy
-    const isProxy = req.query.url && req.query.proxy === '1';
-    
-    if (isProxy) {
-      // PROXY DE PÁGINA
-      const targetUrl = decodeURIComponent(req.query.url);
-      
-      console.log('Proxy:', targetUrl);
-      
+  const url = req.url;
+
+  // PROXY DE STREAMS M3U8
+  if (url.includes('/proxy-stream')) {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return res.status(400).send('URL requerida');
+
+    try {
       const response = await axios({
         method: 'get',
-        url: targetUrl,
+        url: decodeURIComponent(targetUrl),
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'es-ES,es;q=0.9',
-          'Referer': 'https://futbol-libres.su/',
-          'Origin': 'https://futbol-libres.su'
+          'Accept': '*/*',
+          'Referer': 'https://vidzenvivo.cc/',
+          'Origin': 'https://vidzenvivo.cc'
         },
-        timeout: 30000
+        responseType: 'stream',
+        timeout: 60000
       });
-      
-      res.setHeader('Content-Type', 'text/html');
-      return res.send(response.data);
+
+      res.setHeader('Content-Type', response.headers['content-type'] || 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache');
+      response.data.pipe(res);
+      return;
+    } catch (error) {
+      return res.status(500).send('Error: ' + error.message);
     }
-    
-    // SCRAPING NORMAL
+  }
+
+  // SCRAPING
+  try {
     const { data } = await axios.get('https://futbol-libres.su/agenda/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -50,40 +51,57 @@ module.exports = async (req, res) => {
     const $ = cheerio.load(data);
     const eventos = [];
 
-    $('a[href*="eventos.html?r="]').each((i, link) => {
-      try {
+    // Buscar cada evento por su estructura
+    // Según la imagen, cada evento tiene: hora, título, y canales debajo
+    $('div, li, article, .evento, .partido').each((i, elem) => {
+      const $elem = $(elem);
+      const texto = $elem.text();
+      
+      // Buscar si contiene un enlace de evento
+      const $links = $elem.find('a[href*="eventos.html?r="]');
+      if ($links.length === 0) return;
+
+      // Extraer hora (formato HH:MM)
+      const horaMatch = texto.match(/(\d{1,2}:\d{2})/);
+      const hora = horaMatch ? horaMatch[1] : '';
+
+      // Extraer título del partido (buscar línea con vs, -, o que sea el título principal)
+      let titulo = '';
+      
+      // Intentar encontrar el título antes de los enlaces
+      const textoLimpio = $elem.clone().find('a').remove().end().text();
+      const lineas = textoLimpio.split('\n').map(l => l.trim()).filter(l => l);
+      
+      for (let linea of lineas) {
+        // Buscar línea que contenga vs, VS, o sea un partido
+        if (linea.match(/vs|VS|–|-|:/i) && linea.length > 5 && linea.length < 100) {
+          titulo = linea.replace(/^\d{1,2}:\d{2}\s*/, '').trim();
+          break;
+        }
+      }
+      
+      // Si no encontramos, usar primera línea significativa
+      if (!titulo && lineas.length > 0) {
+        titulo = lineas[0].replace(/^\d{1,2}:\d{2}\s*/, '').trim();
+      }
+
+      // Limpiar título
+      titulo = titulo.replace(/^Ver\s+/i, '').replace(/\n/g, ' ').trim();
+      
+      if (!titulo || titulo.length < 3) return;
+
+      // Procesar canales
+      const canales = [];
+      $links.each((j, link) => {
         const $link = $(link);
         const href = $link.attr('href');
         const textoLink = $link.text().trim();
-        
-        if (!href || !textoLink) return;
-        
-        const $parent = $link.parent();
-        const textoParent = $parent.text();
-        
-        // Extraer título
-        let titulo = '';
-        const lineas = textoParent.split('\n').map(l => l.trim()).filter(l => l);
-        
-        for (let linea of lineas) {
-          if (linea.match(/vs|VS|–|-/i) && linea.length < 100) {
-            titulo = linea.replace(/\d+:\d+/, '').replace(/\[.*?\]/g, '').trim();
-            break;
-          }
-        }
-        
-        if (!titulo) titulo = lineas[0] || 'Evento';
-        titulo = titulo.replace(/^Ver\s+/i, '').trim();
-        
-        // Extraer hora
-        const horaMatch = textoParent.match(/(\d{1,2}:\d{2})/);
-        const hora = horaMatch ? horaMatch[1] : '';
-        
+
         // Extraer calidad
         const calidadMatch = textoLink.match(/(\d+p)/i);
         const calidad = calidadMatch ? calidadMatch[1] : 'SD';
-        
-        // Limpiar nombre
+
+        // Extraer nombre del canal
         let nombre = textoLink
           .replace(/Calidad\s+\d+p/i, '')
           .replace(/\d+p/i, '')
@@ -94,48 +112,64 @@ module.exports = async (req, res) => {
           .replace(/\[.*?\]/g, '')
           .replace(/\|/g, '')
           .trim();
-        
-        if (!nombre) nombre = 'Canal';
-        
+
+        if (!nombre) nombre = 'Canal ' + (j + 1);
+
         // Decodificar base64
         const base64Match = href.match(/r=([A-Za-z0-9+/=]+)/);
         let urlDecodificada = '';
         
         if (base64Match && base64Match[1]) {
-          let base64 = base64Match[1];
-          while (base64.length % 4 !== 0) base64 += '=';
-          urlDecodificada = Buffer.from(base64, 'base64').toString('utf-8');
+          try {
+            let base64 = base64Match[1];
+            while (base64.length % 4 !== 0) base64 += '=';
+            urlDecodificada = Buffer.from(base64, 'base64').toString('utf-8');
+          } catch (e) {
+            console.error('Error base64:', e);
+          }
         }
-        
-        if (urlDecodificada && titulo) {
-          const eventoExistente = eventos.find(e => 
-            e.titulo.toLowerCase() === titulo.toLowerCase()
-          );
+
+        if (urlDecodificada) {
+          // Detectar si es m3u8
+          const esM3U8 = urlDecodificada.includes('.m3u8') || urlDecodificada.includes('tracks-v');
           
-          const canalData = {
+          canales.push({
             nombre: nombre,
             calidad: calidad,
             url: urlDecodificada,
-            // URL del proxy para evitar bloqueo de referer
-            proxyUrl: `https://stream-api-flax-seven.vercel.app/api/scrape?url=${encodeURIComponent(urlDecodificada)}&proxy=1`
-          };
-          
-          if (eventoExistente) {
-            const existe = eventoExistente.canales.some(c => c.nombre === nombre);
-            if (!existe) eventoExistente.canales.push(canalData);
-          } else {
-            eventos.push({
-              titulo: titulo,
-              hora: hora,
-              canales: [canalData]
-            });
-          }
+            tipo: esM3U8 ? 'm3u8' : 'iframe',
+            // URL para el proxy si es m3u8
+            proxyUrl: esM3U8 ? 
+              `https://stream-api-flax-seven.vercel.app/api/scrape?url=${encodeURIComponent(urlDecodificada)}&proxy-stream=1` : 
+              urlDecodificada
+          });
         }
-      } catch (e) {
-        console.error('Error link:', e);
+      });
+
+      if (canales.length > 0) {
+        // Verificar si ya existe este evento
+        const existente = eventos.find(e => 
+          e.titulo.toLowerCase() === titulo.toLowerCase() ||
+          (e.hora === hora && titulo.includes(e.titulo.substring(0, 15)))
+        );
+
+        if (existente) {
+          // Agregar canales nuevos
+          canales.forEach(canal => {
+            const existe = existente.canales.some(c => c.nombre === canal.nombre);
+            if (!existe) existente.canales.push(canal);
+          });
+        } else {
+          eventos.push({
+            titulo: titulo,
+            hora: hora,
+            canales: canales
+          });
+        }
       }
     });
 
+    // Ordenar por hora
     eventos.sort((a, b) => {
       if (!a.hora) return 1;
       if (!b.hora) return -1;
@@ -149,7 +183,7 @@ module.exports = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('Error:', error);
     return res.status(500).json({
       success: false,
       error: error.message,
