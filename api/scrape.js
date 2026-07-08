@@ -2,26 +2,23 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async (req, res) => {
-  // CORS headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   try {
-    const url = req.url;
+    // Detectar si es una petición de proxy
+    const isProxy = req.query.url && req.query.proxy === '1';
     
-    // PROXY DE PÁGINAS
-    if (url.startsWith('/api/proxy-page')) {
-      const targetUrl = req.query.url;
-      if (!targetUrl) {
-        return res.status(400).send('URL requerida');
-      }
+    if (isProxy) {
+      // PROXY DE PÁGINA
+      const targetUrl = decodeURIComponent(req.query.url);
       
-      console.log('Proxying page:', targetUrl);
+      console.log('Proxy:', targetUrl);
       
       const response = await axios({
         method: 'get',
@@ -40,38 +37,7 @@ module.exports = async (req, res) => {
       return res.send(response.data);
     }
     
-    // PROXY DE STREAMS M3U8
-    if (url.startsWith('/api/proxy-stream')) {
-      const targetUrl = req.query.url;
-      if (!targetUrl) {
-        return res.status(400).send('URL requerida');
-      }
-      
-      console.log('Proxying stream:', targetUrl);
-      
-      const response = await axios({
-        method: 'get',
-        url: targetUrl,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': '*/*',
-          'Referer': 'https://vidzenvivo.cc/',
-          'Origin': 'https://vidzenvivo.cc'
-        },
-        responseType: 'stream',
-        timeout: 60000
-      });
-      
-      res.setHeader('Content-Type', response.headers['content-type'] || 'application/vnd.apple.mpegurl');
-      res.setHeader('Cache-Control', 'no-cache');
-      
-      response.data.pipe(res);
-      return;
-    }
-    
-    // API PRINCIPAL - SCRAPING
-    console.log('Scraping agenda...');
-    
+    // SCRAPING NORMAL
     const { data } = await axios.get('https://futbol-libres.su/agenda/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -84,7 +50,6 @@ module.exports = async (req, res) => {
     const $ = cheerio.load(data);
     const eventos = [];
 
-    // Buscar enlaces de eventos
     $('a[href*="eventos.html?r="]').each((i, link) => {
       try {
         const $link = $(link);
@@ -93,11 +58,10 @@ module.exports = async (req, res) => {
         
         if (!href || !textoLink) return;
         
-        // Buscar contenedor padre
         const $parent = $link.parent();
         const textoParent = $parent.text();
         
-        // Extraer título (línea que contiene vs o VS)
+        // Extraer título
         let titulo = '';
         const lineas = textoParent.split('\n').map(l => l.trim()).filter(l => l);
         
@@ -108,10 +72,7 @@ module.exports = async (req, res) => {
           }
         }
         
-        if (!titulo) {
-          titulo = lineas[0] || 'Evento';
-        }
-        
+        if (!titulo) titulo = lineas[0] || 'Evento';
         titulo = titulo.replace(/^Ver\s+/i, '').trim();
         
         // Extraer hora
@@ -122,7 +83,7 @@ module.exports = async (req, res) => {
         const calidadMatch = textoLink.match(/(\d+p)/i);
         const calidad = calidadMatch ? calidadMatch[1] : 'SD';
         
-        // Limpiar nombre del canal
+        // Limpiar nombre
         let nombre = textoLink
           .replace(/Calidad\s+\d+p/i, '')
           .replace(/\d+p/i, '')
@@ -154,14 +115,14 @@ module.exports = async (req, res) => {
           const canalData = {
             nombre: nombre,
             calidad: calidad,
-            url: urlDecodificada
+            url: urlDecodificada,
+            // URL del proxy para evitar bloqueo de referer
+            proxyUrl: `https://stream-api-flax-seven.vercel.app/api/scrape?url=${encodeURIComponent(urlDecodificada)}&proxy=1`
           };
           
           if (eventoExistente) {
             const existe = eventoExistente.canales.some(c => c.nombre === nombre);
-            if (!existe) {
-              eventoExistente.canales.push(canalData);
-            }
+            if (!existe) eventoExistente.canales.push(canalData);
           } else {
             eventos.push({
               titulo: titulo,
@@ -171,25 +132,24 @@ module.exports = async (req, res) => {
           }
         }
       } catch (e) {
-        console.error('Error procesando link:', e);
+        console.error('Error link:', e);
       }
     });
 
-    // Ordenar por hora
     eventos.sort((a, b) => {
       if (!a.hora) return 1;
       if (!b.hora) return -1;
       return a.hora.localeCompare(b.hora);
     });
 
-    return res.status(200).json({
+    return res.json({
       success: true,
       totalEventos: eventos.length,
       eventos: eventos
     });
 
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error:', error.message);
     return res.status(500).json({
       success: false,
       error: error.message,
