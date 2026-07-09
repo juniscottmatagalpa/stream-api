@@ -4,13 +4,13 @@ const cheerio = require('cheerio');
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
+    console.log('=== INICIANDO SCRAPE ===');
+    
     const { data: html } = await axios.get('https://futbol-libres.su/agenda/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -23,6 +23,7 @@ module.exports = async (req, res) => {
     const $ = cheerio.load(html);
     const eventos = [];
     let eventoActual = null;
+    let contador = 0;
 
     $('li').each((i, elem) => {
       const $elem = $(elem);
@@ -41,17 +42,32 @@ module.exports = async (req, res) => {
         if (titulo && titulo.length > 3) {
           eventoActual = { titulo, hora, canales: [] };
           eventos.push(eventoActual);
+          console.log(`Evento ${++contador}: ${titulo}`);
         }
       }
 
       if (eventoActual) {
         links.each((j, link) => {
           const $link = $(link);
-          const href = decodeURIComponent($link.attr('href') || '');
-          const texto = $link.text().trim();
+          const hrefCrudo = $link.attr('href') || '';
+          
+          console.log(`  Link crudo encontrado: ${hrefCrudo.substring(0, 80)}...`);
+          
+          let href;
+          try {
+            href = decodeURIComponent(hrefCrudo);
+          } catch (e) {
+            href = hrefCrudo;
+          }
           
           const rMatch = href.match(/[?&]r=([A-Za-z0-9+/=_-]+)/);
-          if (!rMatch) return;
+          
+          if (!rMatch) {
+            console.log('  ❌ No se encontró parámetro r');
+            return;
+          }
+          
+          console.log(`  Base64 extraído: ${rMatch[1].substring(0, 50)}...`);
           
           try {
             let base64 = rMatch[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -59,41 +75,56 @@ module.exports = async (req, res) => {
             if (pad !== 4) base64 += '='.repeat(pad);
             
             const url = Buffer.from(base64, 'base64').toString('utf-8');
+            console.log(`  ✅ URL decodificada: ${url}`);
             
             if (url.startsWith('http')) {
+              const texto = $link.text().trim();
               const calidad = (texto.match(/(\d{3,4}p)/i) || ['', 'SD'])[1];
               const nombre = texto.replace(/Calidad\s+\d+p|\d+p|\(.*?\)|\[.*?\]|\|/gi, '').trim() || `Canal ${j+1}`;
               
               if (!eventoActual.canales.some(c => c.urlOriginal === url)) {
                 eventoActual.canales.push({ nombre, calidad, urlOriginal: url });
+                console.log(`  📺 Canal agregado: ${nombre}`);
               }
+            } else {
+              console.log(`  ❌ URL no válida: ${url}`);
             }
-          } catch (e) {}
+          } catch (e) {
+            console.log(`  ❌ Error decodificando: ${e.message}`);
+          }
         });
       }
     });
 
     const validos = eventos.filter(e => e.canales.length > 0);
+    
+    console.log(`\n=== RESUMEN ===`);
+    console.log(`Eventos encontrados: ${validos.length}`);
+    validos.forEach((e, i) => {
+      console.log(`${i+1}. ${e.titulo} - ${e.canales.length} canales`);
+      e.canales.forEach(c => console.log(`   - ${c.nombre}: ${c.urlOriginal}`));
+    });
 
     if (validos.length === 0) {
-      validos.push({
-        titulo: 'Fútbol Libre',
-        hora: '',
-        canales: [{ nombre: 'DSports', calidad: '1080p', urlOriginal: 'https://esvidzypro.sbs/dsportsar.php' }]
-      });
+      throw new Error('No se encontraron eventos');
     }
-
-    validos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
 
     return res.json({ success: true, eventos: validos });
 
   } catch (error) {
+    console.log('Error:', error.message);
+    console.log('Devolviendo evento por defecto');
+    
     return res.json({
       success: true,
       eventos: [{
-        titulo: 'Fútbol Libre',
-        hora: '',
-        canales: [{ nombre: 'DSports', calidad: '1080p', urlOriginal: 'https://esvidzypro.sbs/dsportsar.php' }]
+        titulo: 'Fútbol Libre TV',
+        hora: 'En vivo',
+        canales: [{
+          nombre: 'DSports',
+          calidad: '1080p',
+          urlOriginal: 'https://esvidzypro.sbs/dsportsar.php'
+        }]
       }]
     });
   }
