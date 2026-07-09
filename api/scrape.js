@@ -118,7 +118,7 @@ module.exports = async (req, res) => {
     return res.json({
       success: true,
       eventos: [{
-        titulo: 'Fútbol Libre TV',
+        titulo: 'Fútbol online',
         hora: 'En vivo',
         canales: [{
           nombre: 'DSports',
