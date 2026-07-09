@@ -11,14 +11,11 @@ module.exports = async (req, res) => {
   }
 
   try {
-    console.log('Scraping https://futbol-libres.su/agenda/...');
-    
     const { data: html } = await axios.get('https://futbol-libres.su/agenda/', {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9',
-        'Referer': 'https://futbol-libres.su/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9'
       },
       timeout: 15000
     });
@@ -27,178 +24,76 @@ module.exports = async (req, res) => {
     const eventos = [];
     let eventoActual = null;
 
-    // Buscar todos los elementos li que contienen eventos
     $('li').each((i, elem) => {
       const $elem = $(elem);
+      const links = $elem.find('a[href*="eventos.html?r="]');
       
-      // Buscar enlaces de canales (con r= en el href)
-      const canalLinks = $elem.find('a[href*="eventos.html?r="]');
-      
-      if (canalLinks.length === 0) return;
+      if (links.length === 0) return;
 
-      // Buscar el título del evento (enlace con href="#")
       const tituloLink = $elem.find('a[href="#"]').first();
       
       if (tituloLink.length > 0) {
-        const textoCompleto = tituloLink.text().trim();
-        
-        // Extraer hora (formato HH:MM al final)
-        const horaMatch = textoCompleto.match(/(\d{1,2}:\d{2})$/);
+        const texto = tituloLink.text().trim();
+        const horaMatch = texto.match(/(\d{1,2}:\d{2})$/);
         const hora = horaMatch ? horaMatch[1] : '';
-        const titulo = textoCompleto.replace(/\d{1,2}:\d{2}$/, '').trim();
+        const titulo = texto.replace(/\d{1,2}:\d{2}$/, '').trim();
         
         if (titulo && titulo.length > 3) {
-          eventoActual = {
-            titulo: titulo,
-            hora: hora,
-            canales: []
-          };
+          eventoActual = { titulo, hora, canales: [] };
           eventos.push(eventoActual);
-          console.log('Evento encontrado:', titulo, '- Hora:', hora);
         }
       }
 
-      // Procesar los canales del evento actual
       if (eventoActual) {
-        canalLinks.each((j, link) => {
+        links.each((j, link) => {
           const $link = $(link);
-          let href = $link.attr('href');
+          const href = decodeURIComponent($link.attr('href') || '');
           const texto = $link.text().trim();
           
-          if (!href) return;
-
-          // Extraer calidad
-          const calidadMatch = texto.match(/(\d{3,4}p)/i);
-          const calidad = calidadMatch ? calidadMatch[1] : 'SD';
-
-          // Limpiar nombre del canal
-          let nombre = texto
-            .replace(/Calidad\s+\d{3,4}p/i, '')
-            .replace(/\d{3,4}p/i, '')
-            .replace(/\(Recomendado\)/gi, '')
-            .replace(/\(Solo LATAM[^)]*\)/gi, '')
-            .replace(/\(Solo Colombia\)/gi, '')
-            .replace(/OP\s+\d+/i, '')
-            .replace(/\[.*?\]/g, '')
-            .replace(/\|/g, '')
-            .trim();
-
-          if (!nombre) nombre = `Canal ${j + 1}`;
-
-          // Extraer el valor de r= del href
-          // Primero decodificar URL-encoding
-          try {
-            href = decodeURIComponent(href);
-          } catch (e) {
-            // Si falla, continuar con el href original
-          }
-
-          // Buscar el parámetro r= (puede estar al principio o después de ?)
           const rMatch = href.match(/[?&]r=([A-Za-z0-9+/=_-]+)/);
+          if (!rMatch) return;
           
-          if (rMatch && rMatch[1]) {
-            try {
-              let base64 = rMatch[1];
+          try {
+            let base64 = rMatch[1].replace(/-/g, '+').replace(/_/g, '/');
+            const pad = 4 - (base64.length % 4);
+            if (pad !== 4) base64 += '='.repeat(pad);
+            
+            const url = Buffer.from(base64, 'base64').toString('utf-8');
+            
+            if (url.startsWith('http')) {
+              const calidad = (texto.match(/(\d{3,4}p)/i) || ['', 'SD'])[1];
+              const nombre = texto.replace(/Calidad\s+\d+p|\d+p|\(.*?\)|\[.*?\]|\|/gi, '').trim() || `Canal ${j+1}`;
               
-              // Reemplazar caracteres URL-safe base64 a estándar
-              base64 = base64.replace(/-/g, '+').replace(/_/g, '/');
-              
-              // Asegurar padding correcto
-              const pad = base64.length % 4;
-              if (pad) {
-                base64 += '='.repeat(4 - pad);
+              if (!eventoActual.canales.some(c => c.urlOriginal === url)) {
+                eventoActual.canales.push({ nombre, calidad, urlOriginal: url });
               }
-
-              // Decodificar base64
-              const urlDecodificada = Buffer.from(base64, 'base64').toString('utf-8');
-              
-              console.log('Base64:', rMatch[1]);
-              console.log('Decodificado:', urlDecodificada);
-              
-              // Verificar que sea URL válida
-              if (urlDecodificada.startsWith('http')) {
-                // Evitar duplicados
-                const existe = eventoActual.canales.some(c => c.nombre === nombre && c.urlOriginal === urlDecodificada);
-                if (!existe) {
-                  eventoActual.canales.push({
-                    nombre: nombre,
-                    calidad: calidad,
-                    urlOriginal: urlDecodificada
-                  });
-                  console.log('✓ Canal agregado:', nombre);
-                }
-              } else {
-                console.log('✗ URL no válida:', urlDecodificada);
-              }
-            } catch (e) {
-              console.error('Error decodificando base64:', e.message, '- Valor:', rMatch[1]);
             }
-          } else {
-            console.log('No se encontró parámetro r en:', href);
-          }
+          } catch (e) {}
         });
       }
     });
 
-    // Limpiar eventos sin canales
-    const eventosValidos = eventos.filter(e => e.canales.length > 0);
+    const validos = eventos.filter(e => e.canales.length > 0);
 
-    console.log(`\nTotal eventos válidos: ${eventosValidos.length}`);
-
-    // Verificar si hay CazeTV, si no, agregarlo al primer evento
-    let tieneCazeTV = eventosValidos.some(e => 
-      e.canales.some(c => c.nombre.toLowerCase().includes('caze'))
-    );
-
-    if (eventosValidos.length === 0) {
-      console.log('No se encontraron eventos, creando evento por defecto');
-      eventosValidos.push({
-        titulo: 'Transmisión en Vivo',
+    if (validos.length === 0) {
+      validos.push({
+        titulo: 'Fútbol Libre',
         hora: '',
-        canales: [{
-          nombre: 'CazeTV',
-          calidad: '1080p',
-          urlOriginal: 'https://latamvidzfy.org/caze2.php'
-        }]
-      });
-    } else if (!tieneCazeTV) {
-      console.log('Agregando CazeTV por defecto');
-      eventosValidos[0].canales.unshift({
-        nombre: 'CazeTV',
-        calidad: '1080p',
-        urlOriginal: 'https://latamvidzfy.org/caze2.php'
+        canales: [{ nombre: 'DSports', calidad: '1080p', urlOriginal: 'https://esvidzypro.sbs/dsportsar.php' }]
       });
     }
 
-    // Ordenar por hora
-    eventosValidos.sort((a, b) => {
-      if (!a.hora) return 1;
-      if (!b.hora) return -1;
-      return a.hora.localeCompare(b.hora);
-    });
+    validos.sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
 
-    return res.json({
-      success: true,
-      fecha: new Date().toISOString(),
-      totalEventos: eventosValidos.length,
-      eventos: eventosValidos
-    });
+    return res.json({ success: true, eventos: validos });
 
   } catch (error) {
-    console.error('Error scraping:', error.message);
-    
     return res.json({
       success: true,
-      fecha: new Date().toISOString(),
-      totalEventos: 1,
       eventos: [{
-        titulo: 'Transmisión en Vivo',
+        titulo: 'Fútbol Libre',
         hora: '',
-        canales: [{
-          nombre: 'CazeTV',
-          calidad: '1080p',
-          urlOriginal: 'https://latamvidzfy.org/caze2.php'
-        }]
+        canales: [{ nombre: 'DSports', calidad: '1080p', urlOriginal: 'https://esvidzypro.sbs/dsportsar.php' }]
       }]
     });
   }
