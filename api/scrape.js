@@ -27,18 +27,18 @@ module.exports = async (req, res) => {
     const eventos = [];
     let eventoActual = null;
 
-    // Buscar todos los elementos que contienen enlaces de eventos
-    $('*').each((i, elem) => {
+    // Buscar todos los elementos li que contienen eventos
+    $('li').each((i, elem) => {
       const $elem = $(elem);
-      const links = $elem.find('a[href*="eventos.html?r="]');
       
-      if (links.length === 0) return;
+      // Buscar enlaces de canales (con r= en el href)
+      const canalLinks = $elem.find('a[href*="eventos.html?r="]');
+      
+      if (canalLinks.length === 0) return;
 
-      // Buscar el título del evento (enlace anterior o texto del elemento padre)
-      const $parent = $elem.closest('li, div, p');
-      const tituloLink = $parent.find('a[href="#"]').first();
+      // Buscar el título del evento (enlace con href="#")
+      const tituloLink = $elem.find('a[href="#"]').first();
       
-      // Si encontramos un nuevo título, creamos nuevo evento
       if (tituloLink.length > 0) {
         const textoCompleto = tituloLink.text().trim();
         
@@ -47,27 +47,27 @@ module.exports = async (req, res) => {
         const hora = horaMatch ? horaMatch[1] : '';
         const titulo = textoCompleto.replace(/\d{1,2}:\d{2}$/, '').trim();
         
-        if (titulo && titulo.length > 3 && !titulo.includes('http')) {
+        if (titulo && titulo.length > 3) {
           eventoActual = {
             titulo: titulo,
             hora: hora,
             canales: []
           };
           eventos.push(eventoActual);
-          console.log('Nuevo evento:', titulo, '- Hora:', hora);
+          console.log('Evento encontrado:', titulo, '- Hora:', hora);
         }
       }
 
-      // Procesar los enlaces de canales
+      // Procesar los canales del evento actual
       if (eventoActual) {
-        links.each((j, link) => {
+        canalLinks.each((j, link) => {
           const $link = $(link);
-          const href = $link.attr('href');
+          let href = $link.attr('href');
           const texto = $link.text().trim();
           
-          if (!href || !href.includes('r=')) return;
+          if (!href) return;
 
-          // Extraer calidad (1080p, 720p, etc)
+          // Extraer calidad
           const calidadMatch = texto.match(/(\d{3,4}p)/i);
           const calidad = calidadMatch ? calidadMatch[1] : 'SD';
 
@@ -83,35 +83,58 @@ module.exports = async (req, res) => {
             .replace(/\|/g, '')
             .trim();
 
-          if (!nombre) nombre = 'Canal';
+          if (!nombre) nombre = `Canal ${j + 1}`;
 
-          // Extraer y decodificar base64
-          const base64Match = href.match(/[?&]r=([A-Za-z0-9+/=]+)/);
+          // Extraer el valor de r= del href
+          // Primero decodificar URL-encoding
+          try {
+            href = decodeURIComponent(href);
+          } catch (e) {
+            // Si falla, continuar con el href original
+          }
+
+          // Buscar el parámetro r= (puede estar al principio o después de ?)
+          const rMatch = href.match(/[?&]r=([A-Za-z0-9+/=_-]+)/);
           
-          if (base64Match && base64Match[1]) {
+          if (rMatch && rMatch[1]) {
             try {
-              let base64 = base64Match[1];
-              // Asegurar padding correcto
-              while (base64.length % 4 !== 0) base64 += '=';
+              let base64 = rMatch[1];
               
+              // Reemplazar caracteres URL-safe base64 a estándar
+              base64 = base64.replace(/-/g, '+').replace(/_/g, '/');
+              
+              // Asegurar padding correcto
+              const pad = base64.length % 4;
+              if (pad) {
+                base64 += '='.repeat(4 - pad);
+              }
+
+              // Decodificar base64
               const urlDecodificada = Buffer.from(base64, 'base64').toString('utf-8');
+              
+              console.log('Base64:', rMatch[1]);
+              console.log('Decodificado:', urlDecodificada);
               
               // Verificar que sea URL válida
               if (urlDecodificada.startsWith('http')) {
                 // Evitar duplicados
-                const existe = eventoActual.canales.some(c => c.nombre === nombre);
+                const existe = eventoActual.canales.some(c => c.nombre === nombre && c.urlOriginal === urlDecodificada);
                 if (!existe) {
                   eventoActual.canales.push({
                     nombre: nombre,
                     calidad: calidad,
                     urlOriginal: urlDecodificada
                   });
-                  console.log('  Canal:', nombre, '- URL:', urlDecodificada);
+                  console.log('✓ Canal agregado:', nombre);
                 }
+              } else {
+                console.log('✗ URL no válida:', urlDecodificada);
               }
             } catch (e) {
-              console.error('Error decodificando base64:', e.message);
+              console.error('Error decodificando base64:', e.message, '- Valor:', rMatch[1]);
             }
+          } else {
+            console.log('No se encontró parámetro r en:', href);
           }
         });
       }
@@ -120,7 +143,9 @@ module.exports = async (req, res) => {
     // Limpiar eventos sin canales
     const eventosValidos = eventos.filter(e => e.canales.length > 0);
 
-    // Si no hay eventos o ninguno tiene CazeTV, agregar por defecto
+    console.log(`\nTotal eventos válidos: ${eventosValidos.length}`);
+
+    // Verificar si hay CazeTV, si no, agregarlo al primer evento
     let tieneCazeTV = eventosValidos.some(e => 
       e.canales.some(c => c.nombre.toLowerCase().includes('caze'))
     );
@@ -137,7 +162,7 @@ module.exports = async (req, res) => {
         }]
       });
     } else if (!tieneCazeTV) {
-      console.log('Agregando CazeTV al primer evento');
+      console.log('Agregando CazeTV por defecto');
       eventosValidos[0].canales.unshift({
         nombre: 'CazeTV',
         calidad: '1080p',
@@ -152,11 +177,6 @@ module.exports = async (req, res) => {
       return a.hora.localeCompare(b.hora);
     });
 
-    console.log(`\nTotal eventos: ${eventosValidos.length}`);
-    eventosValidos.forEach((e, i) => {
-      console.log(`${i + 1}. ${e.titulo} (${e.canales.length} canales)`);
-    });
-
     return res.json({
       success: true,
       fecha: new Date().toISOString(),
@@ -167,7 +187,6 @@ module.exports = async (req, res) => {
   } catch (error) {
     console.error('Error scraping:', error.message);
     
-    // Fallback con CazeTV
     return res.json({
       success: true,
       fecha: new Date().toISOString(),
